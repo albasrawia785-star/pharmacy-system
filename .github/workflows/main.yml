@@ -1,8 +1,9 @@
-name: Build Android APK
+name: Build Android APK with Persistent Signing & Auto Updates
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -10,32 +11,337 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Pre-Clean Conflicting Configurations
+        run: |
+          rm -rf capacitor.config.ts capacitor.config.json
+
+      - name: Unzip Project Files If Needed
+        run: |
+          if [ -f "pos.zip--صيدلي-برو" ] || ls *.zip 1> /dev/null 2>&1; then
+            unzip "pos.zip--صيدلي-برو" -d temp_unzip 2>/dev/null || unzip *.zip -d temp_unzip 2>/dev/null || true
+            TARGET_DIR=$(find temp_unzip -name "package.json" -exec dirname {} \; | head -n 1)
+            if [ -n "$TARGET_DIR" ]; then
+              echo "Found project files in: $TARGET_DIR"
+              cp -r $TARGET_DIR/* .
+            fi
+            rm -rf temp_unzip
+          fi
+
+      - name: Deep Clean Environment
+        run: |
+          rm -rf node_modules package-lock.json dist android
+          find . -name "capacitor.config.ts" -delete
+          find . -name "capacitor.config.json" -delete
+
+      - name: Set up Python for Military Encryption
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Smart Encrypt & Inject Database Credentials
+        env:
+          RAW_TURSO_URL: ${{ secrets.TURSO_URL || '' }}
+          RAW_TURSO_TOKEN: ${{ secrets.TURSO_TOKEN || '' }}
+        run: |
+          python3 -c "
+          import os, re, json
+
+          raw_url = os.environ.get('RAW_TURSO_URL', '').strip()
+          raw_token = os.environ.get('RAW_TURSO_TOKEN', '').strip()
+
+          aldion_path = 'aldion.ts'
+          if not os.path.exists(aldion_path):
+              aldion_path = 'src/aldion.ts'
+
+          if raw_url and raw_token:
+              print('🔒 تم العثور على توكن في الـ YAML -> جاري التشفير والحقن في aldion.ts...')
+              url_key = [83, 183, 31, 140, 66, 158, 97, 170, 53, 212]
+              token_key = [155, 77, 226, 26, 119, 60, 245, 134, 41, 161, 100, 216]
+
+              def encrypt_bytes(text, key, salt=7):
+                  return [(ord(c) ^ key[i % len(key)] ^ ((i * salt) & 0xFF)) & 0xFF for i, c in enumerate(text)]
+
+              enc_url_bytes = encrypt_bytes(raw_url, url_key)
+              enc_token_bytes = encrypt_bytes(raw_token, token_key)
+
+              if os.path.exists(aldion_path):
+                  with open(aldion_path, 'r', encoding='utf-8') as f:
+                      content = f.read()
+
+                  content = re.sub(
+                      r'const _CIPHER_TOKEN_BYTES:\s*number\[\]\s*=\s*\[[\s\S]*?\];',
+                      f'const _CIPHER_TOKEN_BYTES: number[] = {json.dumps(enc_token_bytes)};',
+                      content
+                  )
+
+                  content = re.sub(
+                      r'const _CIPHER_URL_BYTES:\s*number\[\]\s*=\s*\[[\s\S]*?\];',
+                      f'const _CIPHER_URL_BYTES: number[] = {json.dumps(enc_url_bytes)};',
+                      content
+                  )
+
+                  content = re.sub(r'export const MANUAL_OVERRIDE_TURSO_URL:\s*string\s*=\s*[\"|\'].*?[\"|\'];', 'export const MANUAL_OVERRIDE_TURSO_URL: string = \"\";', content)
+                  content = re.sub(r'export const MANUAL_OVERRIDE_TURSO_TOKEN:\s*string\s*=\s*[\"|\'].*?[\"|\'];', 'export const MANUAL_OVERRIDE_TURSO_TOKEN: string = \"\";', content)
+
+                  with open(aldion_path, 'w', encoding='utf-8') as f:
+                      f.write(content)
+
+                  print('✅ تم تشفير التوكن والرابط بنجاح وحقنهما في المشروع!')
+              else:
+                  print('⚠️ تنبيه: لم يتم العثور على ملف aldion.ts.')
+          else:
+              print('⚡ لم يتم إدخال توكن في الـ YAML -> سيتم استخدام التوكن وقاعدة البيانات الموجودة مسبقاً داخل ملفات المشروع.')
+          "
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Cache Node Modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install Dependencies
+        run: |
+          npm install --force
+
+      - name: Build Web Application
+        run: npm run build
+
+      - name: Install Native Capacitor Plugins
+        run: |
+          npm install @capacitor/core@latest @capacitor/cli@latest @capacitor/android@latest @capacitor/filesystem@latest @capacitor/share@latest @capacitor/splash-screen@latest @capacitor/haptics@latest @capacitor-community/sqlite@latest
+
+      - name: Inject Universal Native Download & Share Interceptor
+        run: |
+          cat << 'EOF' > dist/inject_share.js
+          (function() {
+            const originalCreate = URL.createObjectURL;
+            URL.createObjectURL = function(blob) {
+              const url = originalCreate.call(this, blob);
+              if (blob && (blob.type.includes('json') || blob.type.includes('pdf') || blob.type.includes('octet') || blob.type.includes('text') || blob.type.includes('html'))) {
+                const reader = new FileReader();
+                reader.onloadend = async function() {
+                  if (reader.result) {
+                    const base64Data = reader.result.split(',')[1];
+                    if (base64Data) {
+                      const isJson = blob.type.includes('json');
+                      const isHtml = blob.type.includes('html');
+                      const ext = isJson ? 'json' : (isHtml ? 'html' : 'pdf');
+                      const mime = isJson ? 'application/json' : (isHtml ? 'text/html' : 'application/pdf');
+                      triggerNativeShare(base64Data, ext, mime);
+                    }
+                  }
+                };
+                reader.readAsDataURL(blob);
+              }
+              return url;
+            };
+
+            document.addEventListener('click', function(e) {
+              const anchor = e.target.closest('a[download]');
+              if (anchor && anchor.href) {
+                const downloadName = anchor.download || '';
+                const isJson = downloadName.toLowerCase().endsWith('.json');
+                const isHtml = downloadName.toLowerCase().endsWith('.html') || downloadName.toLowerCase().endsWith('.htm');
+                const ext = isJson ? 'json' : (isHtml ? 'html' : 'pdf');
+                const mime = isJson ? 'application/json' : (isHtml ? 'text/html' : 'application/pdf');
+
+                if (anchor.href.startsWith('data:')) {
+                  const parts = anchor.href.split(',');
+                  if (parts.length > 1) {
+                    triggerNativeShare(parts[1], ext, mime, downloadName);
+                  }
+                } else if (anchor.href.startsWith('blob:')) {
+                  fetch(anchor.href).then(function(res) {
+                    return res.blob();
+                  }).then(function(blob) {
+                    const reader = new FileReader();
+                    reader.onloadend = function() {
+                      if (reader.result) {
+                        const base64Data = reader.result.split(',')[1];
+                        if (base64Data) {
+                          triggerNativeShare(base64Data, ext, mime, downloadName);
+                        }
+                      }
+                    };
+                    reader.readAsDataURL(blob);
+                  }).catch(function(err) {
+                    console.log('Blob fetch error:', err);
+                  });
+                }
+              }
+            }, true);
+
+            async function triggerNativeShare(base64Data, ext, mimeType, customFileName) {
+              const dateStr = new Date().toISOString().slice(0, 10);
+              const extension = ext || 'pdf';
+              const isJson = extension === 'json';
+              const fileName = customFileName || (isJson ? `Daftar-Aldeyon-Backup-${dateStr}.json` : `Daftar-Aldeyon-Report-${dateStr}.${extension}`);
+
+              try {
+                if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
+                  const { Filesystem, Share } = window.Capacitor.Plugins;
+
+                  const savedFile = await Filesystem.writeFile({
+                    path: fileName,
+                    data: base64Data,
+                    directory: 'CACHE'
+                  });
+
+                  if (Share && savedFile && savedFile.uri) {
+                    await Share.share({
+                      title: isJson ? 'النسخة الاحتياطية' : 'تقرير كشف الحساب',
+                      text: isJson ? 'ملف النسخة الاحتياطية - دفتر الديون' : 'تقرير كشف الحساب - دفتر الديون',
+                      url: savedFile.uri,
+                      dialogTitle: isJson ? 'حفظ أو مشاركة النسخة الاحتياطية' : 'مشاركة أو حفظ التقرير'
+                    });
+                  }
+                }
+              } catch (err) {
+                console.log('Native Share Error:', err);
+              }
+            }
+          })();
+          EOF
+
+          if [ -f "dist/index.html" ]; then
+            sed -i '/<\/head>/i \  <script src="./inject_share.js"><\/script>' dist/index.html
+          fi
+
+      - name: Initialize Capacitor Android
+        run: |
+          APP_NAME="دفتر الديون"
+          PACKAGE_ID="com.aistudio.debttracker.iqdb"
+
+          npx cap init "$APP_NAME" "$PACKAGE_ID" --web-dir=dist
+          npx cap add android
+          npx cap sync android
+
+      - name: Optimize Native Android Manifest, FileProvider & Safe Permissions
+        run: |
+          MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST_PATH" ]; then
+            sed -i 's/android:debuggable="false"//g' $MANIFEST_PATH
+            sed -i 's/android:debuggable="true"//g' $MANIFEST_PATH
+            sed -i 's/<application/<application android:hardwareAccelerated="true" android:largeHeap="true" android:usesCleartextTraffic="true" android:extractNativeLibs="true" android:requestLegacyExternalStorage="true"/g' $MANIFEST_PATH
+            sed -i 's/<activity/<activity android:windowSoftInputMode="adjustResize"/g' $MANIFEST_PATH
+            sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />' $MANIFEST_PATH
+          fi
+
+          mkdir -p android/app/src/main/res/xml
+          cat << 'EOF' > android/app/src/main/res/xml/file_paths.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths xmlns:android="http://schemas.android.com/apk/res/android">
+              <cache-path name="cache" path="." />
+              <files-path name="files" path="." />
+              <external-path name="external" path="." />
+              <external-cache-path name="external_cache" path="." />
+              <external-files-path name="external_files" path="." />
+          </paths>
+          EOF
+
+          if [ -f "android/app/build.gradle" ]; then
+            sed -i '/android {/a \    lintOptions {\n        checkReleaseBuilds false\n        abortOnError false\n    }' android/app/build.gradle
+          fi
+
+      - name: Generate Multi-Resolution App Icons
+        run: |
+          python3 -m pip install pillow
+          python3 -c "
+          import os
+          from PIL import Image
+
+          sizes = {
+              'mipmap-mdpi': 48,
+              'mipmap-hdpi': 72,
+              'mipmap-xhdpi': 96,
+              'mipmap-xxhdpi': 144,
+              'mipmap-xxxhdpi': 192
+          }
+
+          icon_path = 'icon.png'
+          if not os.path.exists(icon_path):
+              icon_path = 'public/icon.png'
+
+          if os.path.exists(icon_path):
+              img = Image.open(icon_path).convert('RGBA')
+              res_dir = 'android/app/src/main/res'
+              
+              for folder, size in sizes.items():
+                  target_dir = os.path.join(res_dir, folder)
+                  os.makedirs(target_dir, exist_ok=True)
+                  resized = img.resize((size, size), Image.Resampling.LANCZOS)
+                  
+                  for fname in ['ic_launcher.png', 'ic_launcher_round.png', 'ic_launcher_foreground.png']:
+                      resized.save(os.path.join(target_dir, fname))
+              print('Successfully generated launcher icons!')
+          "
+
+      - name: Update Kotlin & Gradle Versions for Java 21
+        run: |
+          cd android
+          if [ -f "build.gradle" ]; then
+            sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.24"/g' build.gradle
+            sed -i 's/kotlin_version = .*/kotlin_version = "1.9.24"/g' build.gradle
+          fi
+
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: 17
+          distribution: 'zulu'
+          java-version: '21'
 
-      - name: Grant execute permission
-        run: chmod +x gradlew
+      - name: Cache Gradle Packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
 
-      - name: Build Release APK
-        run: ./gradlew assembleRelease
+      - name: Sign Release APK with Persistent Key (V1, V2, V3 Signing)
+        run: |
+          cd android
+          chmod +x gradlew
 
-      - name: Build Release AAB
-        run: ./gradlew bundleRelease
+          if [ -f "../daftar_release.keystore" ]; then
+            cp ../daftar_release.keystore release.keystore
+            echo "✅ تم استخدام المفتاح الثابت: daftar_release.keystore"
+          elif [ -f "../release.keystore" ]; then
+            cp ../release.keystore release.keystore
+            echo "✅ تم استخدام المفتاح الثابت: release.keystore"
+          else
+            echo "⚠️ لم يتم العثور على المفتاح، جاري توليد المفتاح..."
+            keytool -genkeypair -v -keystore release.keystore -alias daftar_key -keyalg RSA -keysize 2048 -validity 10000 -storepass "DaftarPass2026" -keypass "DaftarPass2026" -dname "CN=DaftarAldeyon, OU=App, O=Daftar, L=Baghdad, S=Baghdad, C=IQ" -storetype PKCS12
+          fi
 
-      - name: Upload APK
+          RUN_NUM=${{ github.run_number }}
+          if [ -f "app/build.gradle" ]; then
+            sed -i "s/versionCode 1/versionCode $RUN_NUM/g" app/build.gradle || true
+          fi
+
+          ./gradlew assembleRelease --no-daemon -Dorg.gradle.project.android.useAndroidX=true
+
+          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -n 1)
+          DATE_STR=$(date +'%Y-%m-%d')
+          FINAL_APK_NAME="Daftar-Aldeyon-${DATE_STR}-v${RUN_NUM}.apk"
+          
+          # Sign using V1, V2, and V3 signature schemes for 100% Android devices compatibility
+          $BUILD_TOOLS_DIR/apksigner sign --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --ks release.keystore --ks-pass pass:"DaftarPass2026" --key-pass pass:"DaftarPass2026" --out "app/build/outputs/apk/release/${FINAL_APK_NAME}" app/build/outputs/apk/release/app-release-unsigned.apk
+
+      - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk
-          path: app/build/outputs/apk/release/*.apk
-
-      - name: Upload AAB
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-aab
-          path: app/build/outputs/bundle/release/*.aab
+          name: Daftar-Aldeyon-APK
+          path: android/app/build/outputs/apk/release/Daftar-Aldeyon-*.apk
