@@ -1,4 +1,4 @@
-name: Build Android APK with Persistent Signing & Auto Updates
+Name: Build Android APK with Persistent Signing & Auto Updates
 
 on:
   push:
@@ -124,7 +124,6 @@ jobs:
         run: |
           cat << 'EOF' > dist/inject_share.js
           (function() {
-            // Intercept URL.createObjectURL for Blobs
             const originalCreate = URL.createObjectURL;
             URL.createObjectURL = function(blob) {
               const url = originalCreate.call(this, blob);
@@ -147,7 +146,6 @@ jobs:
               return url;
             };
 
-            // Intercept direct download anchor clicks
             document.addEventListener('click', function(e) {
               const anchor = e.target.closest('a[download]');
               if (anchor && anchor.href) {
@@ -246,9 +244,6 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      # =========================================================================
-      # 🛡️ 1. تحسين إعدادات AndroidManifest والتسريع العتادي والصلاحيات
-      # =========================================================================
       - name: Optimize Native Android Manifest & Hardware Acceleration
         run: |
           MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
@@ -263,9 +258,6 @@ jobs:
             sed -i '/android {/a \    lintOptions {\n        checkReleaseBuilds false\n        abortOnError false\n    }' android/app/build.gradle
           fi
 
-      # =========================================================================
-      # 🎨 2. شاشة الإقلاع الأصلية والتصميم الأصلي (Native Splash Screen & Styles)
-      # =========================================================================
       - name: Configure Native Splash Screen & App Themes
         run: |
           STYLES_PATH="android/app/src/main/res/values/styles.xml"
@@ -286,7 +278,6 @@ jobs:
 EOF
           fi
 
-          # إنشاء ملف خلفية شاشة البداية splash.xml إذا لم يكن موجوداً
           mkdir -p android/app/src/main/res/drawable
           cat << 'EOF' > android/app/src/main/res/drawable/splash.xml
 <?xml version="1.0" encoding="utf-8"?>
@@ -300,9 +291,6 @@ EOF
 </layer-list>
 EOF
 
-      # =========================================================================
-      # 🚀 5. تسريع محرك الويب والكاش و 120Hz في MainActivity.java
-      # =========================================================================
       - name: Inject 120Hz & Native Storage Acceleration into MainActivity
         run: |
           MAIN_ACTIVITY=$(find android/app/src/main/java -name "MainActivity.java" | head -n 1)
@@ -323,7 +311,6 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // 🚀 1. دعم أقصى معدل تحديث للشاشة (90Hz / 120Hz High Refresh Rate)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 Display display = getDisplay();
@@ -346,7 +333,6 @@ public class MainActivity extends BridgeActivity {
             }
         } catch (Exception ignored) {}
 
-        // 🚀 2. تسريع محرك الويب والكاش وقواعد البيانات المحلية (DOM Storage & SQLite Engine)
         try {
             if (this.bridge != null && this.bridge.getWebView() != null) {
                 WebView webView = this.bridge.getWebView();
@@ -357,55 +343,39 @@ public class MainActivity extends BridgeActivity {
                 settings.setAllowFileAccess(true);
                 settings.setAllowContentAccess(true);
                 
-                // تسريع الريندر عبر معالج الرسوميات GPU
                 webView.setLayerType(WebView.LAYER_TYPE_HARDWARE, null);
             }
         } catch (Exception ignored) {}
     }
 }
 EOF
-            echo "✅ تم حقن تسريع 120Hz والذاكرة والكاش في MainActivity.java بنجاح!"
+            echo "Done injecting MainActivity"
           fi
 
-      # =========================================================================
-      # ⚡ تفعيل R8 / ProGuard لتقليص الحجم وحذف الكود غير المستخدم وضغط الموارد
-      # =========================================================================
       - name: Enable R8 / ProGuard Optimization & Code Shrinking
         run: |
-          echo "⚡ تفعيل R8 / ProGuard وضغط الموارد لتقليل حجم الـ APK وحماية الكود..."
-
-          # 1. تفعيل minifyEnabled و shrinkResources في build.gradle
           if [ -f "android/app/build.gradle" ]; then
             sed -i 's/minifyEnabled false/minifyEnabled true/g' android/app/build.gradle
             sed -i '/minifyEnabled true/a \            shrinkResources true' android/app/build.gradle
           fi
 
-          # 2. إضافة قواعد الحماية الخاصة بـ Capacitor لمنع حذف أدوات الجافاسكريبت والمكتبات
           cat << 'EOF' >> android/app/proguard-rules.pro
 
-          # ==========================================
-          # Capacitor & WebKit Optimization Rules
-          # ==========================================
           -keepattributes JavascriptInterface
           -keepattributes *Annotation*
 
-          # حماية جسر التواصل بين الويب والأندرويد
           -keepclassmembers class * {
               @android.webkit.JavascriptInterface <methods>;
           }
 
-          # حماية مكتبات كاباسيتور الأساسية والإضافات
           -keep class com.getcapacitor.** { *; }
           -keep interface com.getcapacitor.** { *; }
           -dontwarn com.getcapacitor.**
 
-          # حماية مكونات أندرويد و SQLite
           -keep class androidx.core.content.FileProvider { *; }
           -keep public class * extends com.getcapacitor.Plugin { *; }
           -dontwarn androidx.**
           EOF
-
-          echo "✅ تم تفعيل R8 وتحديث قواعد ProGuard بنجاح!"
 
       - name: Generate Multi-Resolution App Icons
         run: |
@@ -445,143 +415,4 @@ EOF
           cd android
           if [ -f "build.gradle" ]; then
             sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.24"/g' build.gradle
-            sed -i 's/kotlin_version = .*/kotlin_version = "1.9.24"/g' build.gradle
-          fi
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '21'
-
-      - name: Cache Gradle Packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      # =========================================================================
-      # 🔐 6. التوقيع باستخدام المفتاح الدائم الثابت (Persistent Keystore)
-      # =========================================================================
-      - name: Sign Release APK with Persistent Key
-        run: |
-          cd android
-          chmod +x gradlew
-
-          # 1. نسخ المفتاح الدائم الثابت من جذر المشروع
-          if [ -f "../daftar_release.keystore" ]; then
-            cp ../daftar_release.keystore release.keystore
-            echo "✅ تم استخدام المفتاح الثابت: daftar_release.keystore"
-          elif [ -f "../release.keystore" ]; then
-            cp ../release.keystore release.keystore
-            echo "✅ تم استخدام المفتاح الثابت: release.keystore"
-          else
-            echo "⚠️ لم يتم العثور على المفتاح، جاري استخدام المفتاح الاحتياطي..."
-            keytool -genkeypair -v -keystore release.keystore -alias daftar_key -keyalg RSA -keysize 2048 -validity 10000 -storepass "DaftarPass2026" -keypass "DaftarPass2026" -dname "CN=DaftarAldeyon, OU=App, O=Daftar, L=Baghdad, S=Baghdad, C=IQ" -storetype PKCS12
-          fi
-
-          # 2. رفع رقم الإصدار تلقائياً (versionCode)
-          RUN_NUM=${{ github.run_number }}
-          if [ -f "app/build.gradle" ]; then
-            sed -i "s/versionCode 1/versionCode $RUN_NUM/g" app/build.gradle || true
-          fi
-
-          # 3. بناء الـ APK
-          ./gradlew assembleRelease --no-daemon -Dorg.gradle.project.android.useAndroidX=true
-
-          # 4. توقيع الـ APK النهائي بالمفتاح الثابت
-          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -n 1)
-          DATE_STR=$(date +'%Y-%m-%d')
-          FINAL_APK_NAME="Daftar-Aldeyon-${DATE_STR}-v${RUN_NUM}.apk"
-          
-          TARGET_APK=$(find app/build/outputs/apk/release/ -type f -name "*.apk" ! -name "Daftar-Aldeyon-*" | head -n 1)
-          if [ -z "$TARGET_APK" ]; then
-            TARGET_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
-          fi
-          echo "جاري توقيع الملف: $TARGET_APK"
-          $BUILD_TOOLS_DIR/apksigner sign --ks release.keystore --ks-pass pass:"DaftarPass2026" --key-pass pass:"DaftarPass2026" --out "app/build/outputs/apk/release/${FINAL_APK_NAME}" "$TARGET_APK"
-
-      - name: Upload Signed APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Daftar-Aldeyon-APK
-          path: android/app/build/outputs/apk/release/Daftar-Aldeyon-*.apk
-
-      - name: Create GitHub Release with APK
-        uses: softprops/action-gh-release@v2
-        if: success()
-        with:
-          files: android/app/build/outputs/apk/release/Daftar-Aldeyon-*.apk
-          name: "إصدار تطبيق دفتر الديون v${{ github.run_number }}"
-          tag_name: "v${{ github.run_number }}"
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: truer.os }}-gradle-
-
-      # =========================================================================
-      # 🔐 6. التوقيع باستخدام المفتاح الدائم الثابت (Persistent Keystore)
-      # =========================================================================
-      - name: Sign Release APK with Persistent Key
-        run: |
-          cd android
-          chmod +x gradlew
-
-          # 1. نسخ المفتاح الدائم الثابت من جذر المشروع
-          if [ -f "../daftar_release.keystore" ]; then
-            cp ../daftar_release.keystore release.keystore
-            echo "✅ تم استخدام المفتاح الثابت: daftar_release.keystore"
-          elif [ -f "../release.keystore" ]; then
-            cp ../release.keystore release.keystore
-            echo "✅ تم استخدام المفتاح الثابت: release.keystore"
-          else
-            echo "⚠️ لم يتم العثور على المفتاح، جاري استخدام المفتاح الاحتياطي..."
-            keytool -genkeypair -v -keystore release.keystore -alias daftar_key -keyalg RSA -keysize 2048 -validity 10000 -storepass "DaftarPass2026" -keypass "DaftarPass2026" -dname "CN=DaftarAldeyon, OU=App, O=Daftar, L=Baghdad, S=Baghdad, C=IQ" -storetype PKCS12
-          fi
-
-          # 2. رفع رقم الإصدار تلقائياً (versionCode)
-          RUN_NUM=${{ github.run_number }}
-          if [ -f "app/build.gradle" ]; then
-            sed -i "s/versionCode 1/versionCode $RUN_NUM/g" app/build.gradle || true
-          fi
-
-          # 3. بناء الـ APK
-          ./gradlew assembleRelease --no-daemon -Dorg.gradle.project.android.useAndroidX=true
-
-          # 4. توقيع الـ APK النهائي بالمفتاح الثابت
-          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -n 1)
-          DATE_STR=$(date +'%Y-%m-%d')
-          FINAL_APK_NAME="Daftar-Aldeyon-${DATE_STR}-v${RUN_NUM}.apk"
-          
-          TARGET_APK=$(find app/build/outputs/apk/release/ -type f -name "*.apk" ! -name "Daftar-Aldeyon-*" | head -n 1)
-          if [ -z "$TARGET_APK" ]; then
-            TARGET_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
-          fi
-          echo "جاري توقيع الملف: $TARGET_APK"
-          $BUILD_TOOLS_DIR/apksigner sign --ks release.keystore --ks-pass pass:"DaftarPass2026" --key-pass pass:"DaftarPass2026" --out "app/build/outputs/apk/release/${FINAL_APK_NAME}" "$TARGET_APK"
-
-      - name: Upload Signed APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Daftar-Aldeyon-APK
-          path: android/app/build/outputs/apk/release/Daftar-Aldeyon-*.apk
-
-      - name: Create GitHub Release with APK
-        uses: softprops/action-gh-release@v2
-        if: success()
-        with:
-          files: android/app/build/outputs/apk/release/Daftar-Aldeyon-*.apk
-          name: "إصدار تطبيق دفتر الديون v${{ github.run_number }}"
-          tag_name: "v${{ github.run_number }}"
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
+            sed -i 's/kotlin_version = .
