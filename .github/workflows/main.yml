@@ -364,10 +364,9 @@ jobs:
 
       - name: Configure ProGuard Rules & Build Optimization
         run: |
-          echo "⚡ تهيئة إعدادات ProGuard واستقرار البناء..."
-          # إبقاء minifyEnabled معطلاً لتجنب تعارض R8 مع مكتبات Capacitor و SQLCipher
+          echo "⚡ تفعيل تشفير وتعتيم ProGuard / R8 وقواعد الحماية الشاملة..."
           if [ -f "android/app/build.gradle" ]; then
-            sed -i 's/minifyEnabled true/minifyEnabled false/g' android/app/build.gradle
+            sed -i 's/minifyEnabled false/minifyEnabled true/g' android/app/build.gradle
             sed -i '/shrinkResources/d' android/app/build.gradle
           fi
 
@@ -378,18 +377,28 @@ jobs:
           -keepattributes JavascriptInterface
           -keepattributes *Annotation*
 
+          # الحفاظ على واجهات جسر الجافاسكريبت للويب فيو
           -keepclassmembers class * {
               @android.webkit.JavascriptInterface <methods>;
           }
 
+          # الحفاظ على إضافات ونواة كاباسيتور لعدم تعطل الجسر الأصلي
           -keep class com.getcapacitor.** { *; }
           -keep interface com.getcapacitor.** { *; }
           -keep class * extends com.getcapacitor.Plugin { *; }
+          -keep class * extends com.getcapacitor.BridgeActivity { *; }
+          -keep class com.getcapacitor.community.** { *; }
+
+          # الحفاظ على مكتبات تشفير قواعد البيانات والتخزين
           -keep class net.sqlcipher.** { *; }
+          -keep class net.sqlcipher.database.** { *; }
+
+          # مكتبات أندرويد إكس والويب فيو
+          -keep class androidx.webkit.** { *; }
           -keep class androidx.** { *; }
           PROGUARDEOF
 
-          echo "✅ تم ضبط قواعد ProGuard واستقرار الحزم بنجاح!"
+          echo "✅ تم تفعيل تشفير ProGuard بنجاح مع القواعد الكاملة!"
 
       - name: Generate Multi-Resolution App Icons
         run: |
