@@ -1,4 +1,4 @@
-Name: Build Android APK with Persistent Signing & Auto Updates
+name: Build Android APK with Persistent Signing & Auto Updates
 
 on:
   push:
@@ -57,7 +57,7 @@ jobs:
               aldion_path = 'src/aldion.ts'
 
           if raw_url and raw_token:
-              print('🔒 تم العثور على توكن في الـ YAML -> جاري التشفير والحقن في aldion.ts...')
+              print('🔒 Encrypting credentials...')
               url_key = [83, 183, 31, 140, 66, 158, 97, 170, 53, 212]
               token_key = [155, 77, 226, 26, 119, 60, 245, 134, 41, 161, 100, 216]
 
@@ -89,11 +89,11 @@ jobs:
                   with open(aldion_path, 'w', encoding='utf-8') as f:
                       f.write(content)
 
-                  print('✅ تم تشفير التوكن والرابط بنجاح وحقنهما في المشروع!')
+                  print('✅ Injected encrypted credentials successfully!')
               else:
-                  print('⚠️ تنبيه: لم يتم العثور على ملف aldion.ts.')
+                  print('⚠️ aldion.ts not found.')
           else:
-              print('⚡ لم يتم إدخال توكن في الـ YAML -> سيتم استخدام التوكن وقاعدة البيانات الموجودة مسبقاً داخل ملفات المشروع.')
+              print('⚡ No tokens supplied in environment variables.')
           "
 
       - name: Set up Node.js
@@ -237,10 +237,7 @@ jobs:
 
       - name: Initialize Capacitor Android
         run: |
-          APP_NAME="دفتر الديون"
-          PACKAGE_ID="com.daftar.aldeyon"
-
-          npx cap init "$APP_NAME" "$PACKAGE_ID" --web-dir=dist
+          npx cap init "دفتر الديون" "com.daftar.aldeyon" --web-dir=dist
           npx cap add android
           npx cap sync android
 
@@ -349,7 +346,6 @@ public class MainActivity extends BridgeActivity {
     }
 }
 EOF
-            echo "Done injecting MainActivity"
           fi
 
       - name: Enable R8 / ProGuard Optimization & Code Shrinking
@@ -407,7 +403,6 @@ EOF
                   
                   for fname in ['ic_launcher.png', 'ic_launcher_round.png', 'ic_launcher_foreground.png']:
                       resized.save(os.path.join(target_dir, fname))
-              print('Successfully generated launcher icons!')
           "
 
       - name: Update Kotlin & Gradle Versions for Java 21
@@ -415,4 +410,14 @@ EOF
           cd android
           if [ -f "build.gradle" ]; then
             sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.24"/g' build.gradle
-            sed -i 's/kotlin_version = .
+            sed -i 's/kotlin_version = .*/kotlin_version = "1.9.24"/g' build.gradle
+          fi
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Cache Gradle Packages
+        
