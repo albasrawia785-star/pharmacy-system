@@ -13,88 +13,180 @@ jobs:
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Set up Node.js 20
+      - name: Pre-Clean Conflicting Configurations
+        run: |
+          rm -rf capacitor.config.ts capacitor.config.json
+
+      - name: Unzip Project Files If Needed
+        run: |
+          if [ -f "pos.zip--صيدلي-برو" ] || ls *.zip 1> /dev/null 2>&1; then
+            unzip "pos.zip--صيدلي-برو" -d temp_unzip 2>/dev/null || unzip *.zip -d temp_unzip 2>/dev/null || true
+            TARGET_DIR=$(find temp_unzip -name "package.json" -exec dirname {} \; | head -n 1)
+            if [ -n "$TARGET_DIR" ]; then
+              echo "Found project files in: $TARGET_DIR"
+              cp -r $TARGET_DIR/* .
+            fi
+            rm -rf temp_unzip
+          fi
+
+      - name: Deep Clean Environment
+        run: |
+          rm -rf node_modules package-lock.json dist android
+          find . -name "capacitor.config.ts" -delete
+          find . -name "capacitor.config.json" -delete
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Smart Encrypt & Inject Database Credentials
+        env:
+          RAW_TURSO_URL: ${{ secrets.TURSO_URL }}
+          RAW_TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
+        run: |
+          cat << 'PYEOF' > encrypt_credentials.py
+          import os
+          import re
+          import json
+
+          raw_url = os.environ.get('RAW_TURSO_URL', '').strip()
+          raw_token = os.environ.get('RAW_TURSO_TOKEN', '').strip()
+
+          aldion_path = 'aldion.ts'
+          if not os.path.exists(aldion_path):
+              aldion_path = 'src/aldion.ts'
+
+          if raw_url and raw_token:
+              print("🔒 تم العثور على توكن في الـ YAML -> جاري التشفير والحقن في aldion.ts...")
+              url_key = [83, 183, 31, 140, 66, 158, 97, 170, 53, 212]
+              token_key = [155, 77, 226, 26, 119, 60, 245, 134, 41, 161, 100, 216]
+
+              def encrypt_bytes(text, key, salt=7):
+                  return [(ord(c) ^ key[i % len(key)] ^ ((i * salt) & 0xFF)) & 0xFF for i, c in enumerate(text)]
+
+              enc_url_bytes = encrypt_bytes(raw_url, url_key)
+              enc_token_bytes = encrypt_bytes(raw_token, token_key)
+
+              if os.path.exists(aldion_path):
+                  with open(aldion_path, 'r', encoding='utf-8') as f:
+                      content = f.read()
+
+                  content = re.sub(
+                      r'const _CIPHER_TOKEN_BYTES:\s*number\[\]\s*=\s*\[[\s\S]*?\];',
+                      f'const _CIPHER_TOKEN_BYTES: number[] = {json.dumps(enc_token_bytes)};',
+                      content
+                  )
+
+                  content = re.sub(
+                      r'const _CIPHER_URL_BYTES:\s*number\[\]\s*=\s*\[[\s\S]*?\];',
+                      f'const _CIPHER_URL_BYTES: number[] = {json.dumps(enc_url_bytes)};',
+                      content
+                  )
+
+                  content = re.sub(r'export const MANUAL_OVERRIDE_TURSO_URL:\s*string\s*=\s*["|\'].*?["|\'];', 'export const MANUAL_OVERRIDE_TURSO_URL: string = "";', content)
+                  content = re.sub(r'export const MANUAL_OVERRIDE_TURSO_TOKEN:\s*string\s*=\s*["|\'].*?["|\'];', 'export const MANUAL_OVERRIDE_TURSO_TOKEN: string = "";', content)
+
+                  with open(aldion_path, 'w', encoding='utf-8') as f:
+                      f.write(content)
+
+                  print("✅ تم تشفير التوكن والرابط بنجاح وحقنهما في المشروع!")
+              else:
+                  print("⚠️ تنبيه: لم يتم العثور على ملف aldion.ts.")
+          else:
+              print("⚡ لم يتم إدخال توكن في الـ YAML -> سيتم استخدام التوكن وقاعدة البيانات الموجودة مسبقاً داخل ملفات المشروع.")
+          PYEOF
+          python3 encrypt_credentials.py
+          rm -f encrypt_credentials.py
+
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: '22'
 
-      - name: Install Project Dependencies
+      - name: Cache Node Modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install Dependencies
         run: |
-          npm ci || npm install
+          npm install --force
 
-      - name: Inject Dynamic API Base & Update Service
-        env:
-          GITHUB_REPO: ${{ github.repository }}
-        run: |
-          # 1. حقن مسار التحديثات التلقائية وقراءة أحدث Release
-          cat << 'PYEOF' > inject_updates.py
-          import os
-
-          repo = os.environ.get('GITHUB_REPO', '')
-          if not repo:
-              repo = 'owner/repo'
-
-          update_service_code = f"""
-          // 🚀 خدمة التحديثات التلقائية المدمجة لتطبيق أندرويد
-          export interface AppUpdateInfo {{
-            hasUpdate: boolean;
-            latestVersion: string;
-            downloadUrl: string;
-            releaseNotes: string;
-          }}
-
-          export async function checkForAppUpdates(currentRunNumber: number): Promise<AppUpdateInfo | null> {{
-            try {{
-              const res = await fetch(`https://api.github.com/repos/{repo}/releases/latest`, {{
-                headers: {{ 'Accept': 'application/vnd.github.v3+json' }}
-              }});
-              if (!res.ok) return null;
-              const data = await res.json();
-              const tag = data.tag_name || '';
-              const latestNum = parseInt(tag.replace(/[^0-9]/g, ''), 10);
-
-              if (!isNaN(latestNum) && latestNum > currentRunNumber) {{
-                const apkAsset = (data.assets || []).find((a: any) => a.name && a.name.endsWith('.apk'));
-                return {{
-                  hasUpdate: true,
-                  latestVersion: tag,
-                  downloadUrl: apkAsset ? apkAsset.browser_download_url : data.html_url,
-                  releaseNotes: data.body || 'تحسينات جديدة وإصلاحات أداء'
-                }};
-              }}
-            }} catch (e) {{
-              console.log('Update check failed:', e);
-            }}
-            return null;
-          }}
-          """
-
-          os.makedirs('src/services', exist_ok=True)
-          with open('src/services/appUpdateService.ts', 'w', encoding='utf-8') as f:
-              f.write(update_service_code.strip())
-          print('Successfully injected update service with repo:', repo)
-          PYEOF
-          python3 inject_updates.py
-          rm -f inject_updates.py
-
-      - name: Compile & Build Web Application (Vite)
+      - name: Build Web Application
         run: |
           npm run build
 
-      - name: Inject Native Share & Offline Download Bridge into Web Dist
+      - name: Install Native Capacitor Plugins
+        run: |
+          npm install @capacitor/core@latest @capacitor/cli@latest @capacitor/android@latest @capacitor/filesystem@latest @capacitor/share@latest @capacitor/splash-screen@latest @capacitor/haptics@latest @capacitor-community/sqlite@latest
+
+      - name: Inject Universal Native Download & Share Interceptor
         run: |
           cat << 'JSEOF' > dist/inject_share.js
           (function() {
-            window.isNativeAndroidApp = function() {
-              return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+            var originalCreate = URL.createObjectURL;
+            URL.createObjectURL = function(blob) {
+              var url = originalCreate.call(this, blob);
+              if (blob && (blob.type.includes('json') || blob.type.includes('octet') || blob.type.includes('text') || blob.type.includes('pdf') || blob.type.includes('html'))) {
+                var reader = new FileReader();
+                reader.onloadend = function() {
+                  if (reader.result) {
+                    var base64Data = reader.result.split(',')[1];
+                    if (base64Data) {
+                      var isJson = blob.type.includes('json');
+                      var isHtml = blob.type.includes('html');
+                      var ext = isJson ? 'json' : (isHtml ? 'html' : 'pdf');
+                      var mime = isJson ? 'application/json' : (isHtml ? 'text/html' : 'application/pdf');
+                      triggerNativeShare(base64Data, ext, mime);
+                    }
+                  }
+                };
+                reader.readAsDataURL(blob);
+              }
+              return url;
             };
 
-            window.nativeShareOrDownload = async function(base64Data, filename, mimeType, ext) {
-              var customFileName = filename;
+            document.addEventListener('click', function(e) {
+              var anchor = e.target.closest('a[download]');
+              if (anchor && anchor.href) {
+                var downloadName = anchor.download || '';
+                var isJson = downloadName.toLowerCase().endsWith('.json');
+                var isHtml = downloadName.toLowerCase().endsWith('.html') || downloadName.toLowerCase().endsWith('.htm');
+                var ext = isJson ? 'json' : (isHtml ? 'html' : 'pdf');
+                var mime = isJson ? 'application/json' : (isHtml ? 'text/html' : 'application/pdf');
+
+                if (anchor.href.startsWith('data:')) {
+                  var parts = anchor.href.split(',');
+                  if (parts.length > 1) {
+                    triggerNativeShare(parts[1], ext, mime, downloadName);
+                  }
+                } else if (anchor.href.startsWith('blob:')) {
+                  fetch(anchor.href).then(function(res) {
+                    return res.blob();
+                  }).then(function(blob) {
+                    var reader = new FileReader();
+                    reader.onloadend = function() {
+                      if (reader.result) {
+                        var base64Data = reader.result.split(',')[1];
+                        if (base64Data) {
+                          triggerNativeShare(base64Data, ext, mime, downloadName);
+                        }
+                      }
+                    };
+                    reader.readAsDataURL(blob);
+                  }).catch(function(err) {
+                    console.log('Blob fetch error:', err);
+                  });
+                }
+              }
+            }, true);
+
+            async function triggerNativeShare(base64Data, ext, mimeType, customFileName) {
               var dateStr = new Date().toISOString().slice(0, 10);
               var extension = ext || 'pdf';
               var isJson = extension === 'json';
@@ -174,7 +266,7 @@ jobs:
 
       - name: Configure Native Splash Screen & App Themes
         run: |
-          # 🛡️ حذف أي ملفات splash قديمة لتجنب تضارب الموارد في Gradle
+          # 🛡️ حذف أي ملفات splash قديمة لتجنب خطأ Duplicate resources في Gradle
           find android/app/src/main/res -name "splash.png" -delete
           find android/app/src/main/res -name "splash.webp" -delete
           find android/app/src/main/res -name "splash.jpg" -delete
