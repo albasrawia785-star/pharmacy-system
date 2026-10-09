@@ -523,4 +523,65 @@ EOF
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: truer.os }}-gradle-
+
+      # =========================================================================
+      # 🔐 6. التوقيع باستخدام المفتاح الدائم الثابت (Persistent Keystore)
+      # =========================================================================
+      - name: Sign Release APK with Persistent Key
+        run: |
+          cd android
+          chmod +x gradlew
+
+          # 1. نسخ المفتاح الدائم الثابت من جذر المشروع
+          if [ -f "../daftar_release.keystore" ]; then
+            cp ../daftar_release.keystore release.keystore
+            echo "✅ تم استخدام المفتاح الثابت: daftar_release.keystore"
+          elif [ -f "../release.keystore" ]; then
+            cp ../release.keystore release.keystore
+            echo "✅ تم استخدام المفتاح الثابت: release.keystore"
+          else
+            echo "⚠️ لم يتم العثور على المفتاح، جاري استخدام المفتاح الاحتياطي..."
+            keytool -genkeypair -v -keystore release.keystore -alias daftar_key -keyalg RSA -keysize 2048 -validity 10000 -storepass "DaftarPass2026" -keypass "DaftarPass2026" -dname "CN=DaftarAldeyon, OU=App, O=Daftar, L=Baghdad, S=Baghdad, C=IQ" -storetype PKCS12
+          fi
+
+          # 2. رفع رقم الإصدار تلقائياً (versionCode)
+          RUN_NUM=${{ github.run_number }}
+          if [ -f "app/build.gradle" ]; then
+            sed -i "s/versionCode 1/versionCode $RUN_NUM/g" app/build.gradle || true
+          fi
+
+          # 3. بناء الـ APK
+          ./gradlew assembleRelease --no-daemon -Dorg.gradle.project.android.useAndroidX=true
+
+          # 4. توقيع الـ APK النهائي بالمفتاح الثابت
+          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -n 1)
+          DATE_STR=$(date +'%Y-%m-%d')
+          FINAL_APK_NAME="Daftar-Aldeyon-${DATE_STR}-v${RUN_NUM}.apk"
+          
+          TARGET_APK=$(find app/build/outputs/apk/release/ -type f -name "*.apk" ! -name "Daftar-Aldeyon-*" | head -n 1)
+          if [ -z "$TARGET_APK" ]; then
+            TARGET_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
+          fi
+          echo "جاري توقيع الملف: $TARGET_APK"
+          $BUILD_TOOLS_DIR/apksigner sign --ks release.keystore --ks-pass pass:"DaftarPass2026" --key-pass pass:"DaftarPass2026" --out "app/build/outputs/apk/release/${FINAL_APK_NAME}" "$TARGET_APK"
+
+      - name: Upload Signed APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Daftar-Aldeyon-APK
+          path: android/app/build/outputs/apk/release/Daftar-Aldeyon-*.apk
+
+      - name: Create GitHub Release with APK
+        uses: softprops/action-gh-release@v2
+        if: success()
+        with:
+          files: android/app/build/outputs/apk/release/Daftar-Aldeyon-*.apk
+          name: "إصدار تطبيق دفتر الديون v${{ github.run_number }}"
+          tag_name: "v${{ github.run_number }}"
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
