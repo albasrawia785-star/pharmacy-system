@@ -266,6 +266,11 @@ jobs:
 
       - name: Configure Native Splash Screen & App Themes
         run: |
+          # 🛡️ حذف أي ملفات splash قديمة لتجنب خطأ Duplicate resources في Gradle
+          find android/app/src/main/res -name "splash.png" -delete
+          find android/app/src/main/res -name "splash.webp" -delete
+          find android/app/src/main/res -name "splash.jpg" -delete
+
           STYLES_PATH="android/app/src/main/res/values/styles.xml"
           if [ -f "$STYLES_PATH" ]; then
             cat << 'XMLEOF' > "$STYLES_PATH"
