@@ -124,10 +124,11 @@ jobs:
         run: |
           cat << 'EOF' > dist/inject_share.js
           (function() {
+            // Intercept URL.createObjectURL for Blobs
             const originalCreate = URL.createObjectURL;
             URL.createObjectURL = function(blob) {
               const url = originalCreate.call(this, blob);
-              if (blob && (blob.type.includes('json') || blob.type.includes('pdf') || blob.type.includes('octet') || blob.type.includes('text') || blob.type.includes('html'))) {
+              if (blob && (blob.type.includes('json') || blob.type.includes('octet') || blob.type.includes('text') || blob.type.includes('pdf') || blob.type.includes('html'))) {
                 const reader = new FileReader();
                 reader.onloadend = async function() {
                   if (reader.result) {
@@ -146,6 +147,7 @@ jobs:
               return url;
             };
 
+            // Intercept direct download anchor clicks
             document.addEventListener('click', function(e) {
               const anchor = e.target.closest('a[download]');
               if (anchor && anchor.href) {
@@ -197,17 +199,35 @@ jobs:
                     directory: 'CACHE'
                   });
 
-                  if (Share && savedFile && savedFile.uri) {
-                    await Share.share({
-                      title: isJson ? 'النسخة الاحتياطية' : 'تقرير كشف الحساب',
-                      text: isJson ? 'ملف النسخة الاحتياطية - دفتر الديون' : 'تقرير كشف الحساب - دفتر الديون',
-                      url: savedFile.uri,
-                      dialogTitle: isJson ? 'حفظ أو مشاركة النسخة الاحتياطية' : 'مشاركة أو حفظ التقرير'
-                    });
+                  await Share.share({
+                    title: isJson ? 'النسخة الاحتياطية' : 'تقرير كشف الحساب',
+                    text: isJson ? 'ملف النسخة الاحتياطية - دفتر الديون' : 'تقرير كشف الحساب - دفتر الديون',
+                    url: savedFile.uri,
+                    dialogTitle: isJson ? 'حفظ أو مشاركة النسخة الاحتياطية' : 'مشاركة أو حفظ التقرير'
+                  });
+                } else if (navigator.share) {
+                  try {
+                    const byteChars = atob(base64Data);
+                    const byteNumbers = new Array(byteChars.length);
+                    for (let i = 0; i < byteChars.length; i++) {
+                      byteNumbers[i] = byteChars.charCodeAt(i);
+                    }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    const file = new File([byteArray], fileName, { type: mimeType || (isJson ? 'application/json' : 'application/pdf') });
+
+                    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                      await navigator.share({
+                        files: [file],
+                        title: isJson ? 'النسخة الاحتياطية' : 'تقرير كشف الحساب',
+                        text: isJson ? 'ملف النسخة الاحتياطية' : 'تقرير كشف الحساب - دفتر الديون',
+                      });
+                    }
+                  } catch (webShareErr) {
+                    console.log('WebShare API fallback:', webShareErr);
                   }
                 }
               } catch (err) {
-                console.log('Native Share Error:', err);
+                console.log('Native Share Failed:', err);
               }
             }
           })();
@@ -220,38 +240,172 @@ jobs:
       - name: Initialize Capacitor Android
         run: |
           APP_NAME="دفتر الديون"
-          PACKAGE_ID="com.aistudio.debttracker.iqdb"
+          PACKAGE_ID="com.daftar.aldeyon"
 
           npx cap init "$APP_NAME" "$PACKAGE_ID" --web-dir=dist
           npx cap add android
           npx cap sync android
 
-      - name: Optimize Native Android Manifest, FileProvider & Safe Permissions
+      # =========================================================================
+      # 🛡️ 1. تحسين إعدادات AndroidManifest والتسريع العتادي والصلاحيات
+      # =========================================================================
+      - name: Optimize Native Android Manifest & Hardware Acceleration
         run: |
           MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST_PATH" ]; then
             sed -i 's/android:debuggable="false"//g' $MANIFEST_PATH
             sed -i 's/android:debuggable="true"//g' $MANIFEST_PATH
-            sed -i 's/<application/<application android:hardwareAccelerated="true" android:largeHeap="true" android:usesCleartextTraffic="true" android:extractNativeLibs="true" android:requestLegacyExternalStorage="true"/g' $MANIFEST_PATH
-            sed -i 's/<activity/<activity android:windowSoftInputMode="adjustResize"/g' $MANIFEST_PATH
-            sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />' $MANIFEST_PATH
+            sed -i 's/<application/<application android:hardwareAccelerated="true" android:largeHeap="true" android:extractNativeLibs="true"/g' $MANIFEST_PATH
+            sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' $MANIFEST_PATH
           fi
-
-          mkdir -p android/app/src/main/res/xml
-          cat << 'EOF' > android/app/src/main/res/xml/file_paths.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <paths xmlns:android="http://schemas.android.com/apk/res/android">
-              <cache-path name="cache" path="." />
-              <files-path name="files" path="." />
-              <external-path name="external" path="." />
-              <external-cache-path name="external_cache" path="." />
-              <external-files-path name="external_files" path="." />
-          </paths>
-          EOF
 
           if [ -f "android/app/build.gradle" ]; then
             sed -i '/android {/a \    lintOptions {\n        checkReleaseBuilds false\n        abortOnError false\n    }' android/app/build.gradle
           fi
+
+      # =========================================================================
+      # 🎨 2. شاشة الإقلاع الأصلية والتصميم الأصلي (Native Splash Screen & Styles)
+      # =========================================================================
+      - name: Configure Native Splash Screen & App Themes
+        run: |
+          STYLES_PATH="android/app/src/main/res/values/styles.xml"
+          if [ -f "$STYLES_PATH" ]; then
+            cat << 'EOF' > "$STYLES_PATH"
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="colorPrimary">#0284c7</item>
+        <item name="colorPrimaryDark">#0369a1</item>
+        <item name="colorAccent">#0ea5e9</item>
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+    <style name="AppTheme.NoActionBarLaunch" parent="AppTheme">
+        <item name="android:windowBackground">@drawable/splash</item>
+    </style>
+</resources>
+EOF
+          fi
+
+          # إنشاء ملف خلفية شاشة البداية splash.xml إذا لم يكن موجوداً
+          mkdir -p android/app/src/main/res/drawable
+          cat << 'EOF' > android/app/src/main/res/drawable/splash.xml
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@android:color/white" />
+    <item android:gravity="center">
+        <bitmap
+            android:gravity="center"
+            android:src="@mipmap/ic_launcher" />
+    </item>
+</layer-list>
+EOF
+
+      # =========================================================================
+      # 🚀 5. تسريع محرك الويب والكاش و 120Hz في MainActivity.java
+      # =========================================================================
+      - name: Inject 120Hz & Native Storage Acceleration into MainActivity
+        run: |
+          MAIN_ACTIVITY=$(find android/app/src/main/java -name "MainActivity.java" | head -n 1)
+          if [ -n "$MAIN_ACTIVITY" ]; then
+            cat << 'EOF' > "$MAIN_ACTIVITY"
+package com.daftar.aldeyon;
+
+import android.os.Bundle;
+import android.os.Build;
+import android.view.WindowManager;
+import android.view.Display;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import com.getcapacitor.BridgeActivity;
+
+public class MainActivity extends BridgeActivity {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // 🚀 1. دعم أقصى معدل تحديث للشاشة (90Hz / 120Hz High Refresh Rate)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Display display = getDisplay();
+                if (display != null) {
+                    Display.Mode[] modes = display.getSupportedModes();
+                    float maxRefreshRate = 60.0f;
+                    Display.Mode bestMode = null;
+                    for (Display.Mode mode : modes) {
+                        if (mode.getRefreshRate() > maxRefreshRate) {
+                            maxRefreshRate = mode.getRefreshRate();
+                            bestMode = mode;
+                        }
+                    }
+                    if (bestMode != null) {
+                        WindowManager.LayoutParams params = getWindow().getAttributes();
+                        params.preferredDisplayModeId = bestMode.getModeId();
+                        getWindow().setAttributes(params);
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+
+        // 🚀 2. تسريع محرك الويب والكاش وقواعد البيانات المحلية (DOM Storage & SQLite Engine)
+        try {
+            if (this.bridge != null && this.bridge.getWebView() != null) {
+                WebView webView = this.bridge.getWebView();
+                WebSettings settings = webView.getSettings();
+                settings.setDomStorageEnabled(true);
+                settings.setDatabaseEnabled(true);
+                settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+                settings.setAllowFileAccess(true);
+                settings.setAllowContentAccess(true);
+                
+                // تسريع الريندر عبر معالج الرسوميات GPU
+                webView.setLayerType(WebView.LAYER_TYPE_HARDWARE, null);
+            }
+        } catch (Exception ignored) {}
+    }
+}
+EOF
+            echo "✅ تم حقن تسريع 120Hz والذاكرة والكاش في MainActivity.java بنجاح!"
+          fi
+
+      # =========================================================================
+      # ⚡ تفعيل R8 / ProGuard لتقليص الحجم وحذف الكود غير المستخدم وضغط الموارد
+      # =========================================================================
+      - name: Enable R8 / ProGuard Optimization & Code Shrinking
+        run: |
+          echo "⚡ تفعيل R8 / ProGuard وضغط الموارد لتقليل حجم الـ APK وحماية الكود..."
+
+          # 1. تفعيل minifyEnabled و shrinkResources في build.gradle
+          if [ -f "android/app/build.gradle" ]; then
+            sed -i 's/minifyEnabled false/minifyEnabled true/g' android/app/build.gradle
+            sed -i '/minifyEnabled true/a \            shrinkResources true' android/app/build.gradle
+          fi
+
+          # 2. إضافة قواعد الحماية الخاصة بـ Capacitor لمنع حذف أدوات الجافاسكريبت والمكتبات
+          cat << 'EOF' >> android/app/proguard-rules.pro
+
+          # ==========================================
+          # Capacitor & WebKit Optimization Rules
+          # ==========================================
+          -keepattributes JavascriptInterface
+          -keepattributes *Annotation*
+
+          # حماية جسر التواصل بين الويب والأندرويد
+          -keepclassmembers class * {
+              @android.webkit.JavascriptInterface <methods>;
+          }
+
+          # حماية مكتبات كاباسيتور الأساسية والإضافات
+          -keep class com.getcapacitor.** { *; }
+          -keep interface com.getcapacitor.** { *; }
+          -dontwarn com.getcapacitor.**
+
+          # حماية مكونات أندرويد و SQLite
+          -keep class androidx.core.content.FileProvider { *; }
+          -keep public class * extends com.getcapacitor.Plugin { *; }
+          -dontwarn androidx.**
+          EOF
+
+          echo "✅ تم تفعيل R8 وتحديث قواعد ProGuard بنجاح!"
 
       - name: Generate Multi-Resolution App Icons
         run: |
@@ -310,11 +464,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Sign Release APK with Persistent Key (V1, V2, V3 Signing)
+      # =========================================================================
+      # 🔐 6. التوقيع باستخدام المفتاح الدائم الثابت (Persistent Keystore)
+      # =========================================================================
+      - name: Sign Release APK with Persistent Key
         run: |
           cd android
           chmod +x gradlew
 
+          # 1. نسخ المفتاح الدائم الثابت من جذر المشروع
           if [ -f "../daftar_release.keystore" ]; then
             cp ../daftar_release.keystore release.keystore
             echo "✅ تم استخدام المفتاح الثابت: daftar_release.keystore"
@@ -322,26 +480,47 @@ jobs:
             cp ../release.keystore release.keystore
             echo "✅ تم استخدام المفتاح الثابت: release.keystore"
           else
-            echo "⚠️ لم يتم العثور على المفتاح، جاري توليد المفتاح..."
+            echo "⚠️ لم يتم العثور على المفتاح، جاري استخدام المفتاح الاحتياطي..."
             keytool -genkeypair -v -keystore release.keystore -alias daftar_key -keyalg RSA -keysize 2048 -validity 10000 -storepass "DaftarPass2026" -keypass "DaftarPass2026" -dname "CN=DaftarAldeyon, OU=App, O=Daftar, L=Baghdad, S=Baghdad, C=IQ" -storetype PKCS12
           fi
 
+          # 2. رفع رقم الإصدار تلقائياً (versionCode)
           RUN_NUM=${{ github.run_number }}
           if [ -f "app/build.gradle" ]; then
             sed -i "s/versionCode 1/versionCode $RUN_NUM/g" app/build.gradle || true
           fi
 
+          # 3. بناء الـ APK
           ./gradlew assembleRelease --no-daemon -Dorg.gradle.project.android.useAndroidX=true
 
+          # 4. توقيع الـ APK النهائي بالمفتاح الثابت
           BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -n 1)
           DATE_STR=$(date +'%Y-%m-%d')
           FINAL_APK_NAME="Daftar-Aldeyon-${DATE_STR}-v${RUN_NUM}.apk"
           
-          # Sign using V1, V2, and V3 signature schemes for 100% Android devices compatibility
-          $BUILD_TOOLS_DIR/apksigner sign --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --ks release.keystore --ks-pass pass:"DaftarPass2026" --key-pass pass:"DaftarPass2026" --out "app/build/outputs/apk/release/${FINAL_APK_NAME}" app/build/outputs/apk/release/app-release-unsigned.apk
+          TARGET_APK=$(find app/build/outputs/apk/release/ -type f -name "*.apk" ! -name "Daftar-Aldeyon-*" | head -n 1)
+          if [ -z "$TARGET_APK" ]; then
+            TARGET_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
+          fi
+          echo "جاري توقيع الملف: $TARGET_APK"
+          $BUILD_TOOLS_DIR/apksigner sign --ks release.keystore --ks-pass pass:"DaftarPass2026" --key-pass pass:"DaftarPass2026" --out "app/build/outputs/apk/release/${FINAL_APK_NAME}" "$TARGET_APK"
 
-      - name: Upload Signed APK
+      - name: Upload Signed APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Daftar-Aldeyon-APK
           path: android/app/build/outputs/apk/release/Daftar-Aldeyon-*.apk
+
+      - name: Create GitHub Release with APK
+        uses: softprops/action-gh-release@v2
+        if: success()
+        with:
+          files: android/app/build/outputs/apk/release/Daftar-Aldeyon-*.apk
+          name: "إصدار تطبيق دفتر الديون v${{ github.run_number }}"
+          tag_name: "v${{ github.run_number }}"
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
