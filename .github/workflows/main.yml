@@ -15,7 +15,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Pre-Clean Conflicting Configurations
-        run: rm -rf capacitor.config.ts capacitor.config.json
+        run: |
+          rm -rf capacitor.config.ts capacitor.config.json
 
       - name: Unzip Project Files If Needed
         run: |
@@ -35,15 +36,20 @@ jobs:
           find . -name "capacitor.config.ts" -delete
           find . -name "capacitor.config.json" -delete
 
-      - name: Set up Python for Military Encryption
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      - name: Create Encryption Script
+      - name: Smart Encrypt & Inject Database Credentials
+        env:
+          RAW_TURSO_URL: ${{ secrets.TURSO_URL }}
+          RAW_TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
         run: |
-          cat << 'PYEOF' > encrypt_script.py
-          import os, re, json
+          cat << 'PYEOF' > encrypt_credentials.py
+          import os
+          import re
+          import json
 
           raw_url = os.environ.get('RAW_TURSO_URL', '').strip()
           raw_token = os.environ.get('RAW_TURSO_TOKEN', '').strip()
@@ -53,7 +59,7 @@ jobs:
               aldion_path = 'src/aldion.ts'
 
           if raw_url and raw_token:
-              print('Encrypting credentials...')
+              print("🔒 تم العثور على توكن في الـ YAML -> جاري التشفير والحقن في aldion.ts...")
               url_key = [83, 183, 31, 140, 66, 158, 97, 170, 53, 212]
               token_key = [155, 77, 226, 26, 119, 60, 245, 134, 41, 161, 100, 216]
 
@@ -79,24 +85,20 @@ jobs:
                       content
                   )
 
-                  content = re.sub(r'export const MANUAL_OVERRIDE_TURSO_URL:\s*string\s*=\s*[\"|\'].*?[\"|\'];', 'export const MANUAL_OVERRIDE_TURSO_URL: string = "";', content)
-                  content = re.sub(r'export const MANUAL_OVERRIDE_TURSO_TOKEN:\s*string\s*=\s*[\"|\'].*?[\"|\'];', 'export const MANUAL_OVERRIDE_TURSO_TOKEN: string = "";', content)
+                  content = re.sub(r'export const MANUAL_OVERRIDE_TURSO_URL:\s*string\s*=\s*["|\'].*?["|\'];', 'export const MANUAL_OVERRIDE_TURSO_URL: string = "";', content)
+                  content = re.sub(r'export const MANUAL_OVERRIDE_TURSO_TOKEN:\s*string\s*=\s*["|\'].*?["|\'];', 'export const MANUAL_OVERRIDE_TURSO_TOKEN: string = "";', content)
 
                   with open(aldion_path, 'w', encoding='utf-8') as f:
                       f.write(content)
 
-                  print('Injected encrypted credentials successfully!')
+                  print("✅ تم تشفير التوكن والرابط بنجاح وحقنهما في المشروع!")
               else:
-                  print('aldion.ts not found.')
+                  print("⚠️ تنبيه: لم يتم العثور على ملف aldion.ts.")
           else:
-              print('No tokens supplied in environment variables.')
+              print("⚡ لم يتم إدخال توكن في الـ YAML -> سيتم استخدام التوكن وقاعدة البيانات الموجودة مسبقاً داخل ملفات المشروع.")
           PYEOF
-
-      - name: Smart Encrypt & Inject Database Credentials
-        env:
-          RAW_TURSO_URL: ${{ secrets.TURSO_URL || '' }}
-          RAW_TURSO_TOKEN: ${{ secrets.TURSO_TOKEN || '' }}
-        run: python3 encrypt_script.py
+          python3 encrypt_credentials.py
+          rm -f encrypt_credentials.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -112,10 +114,12 @@ jobs:
             ${{ runner.os }}-node-
 
       - name: Install Dependencies
-        run: npm install --force
+        run: |
+          npm install --force
 
       - name: Build Web Application
-        run: npm run build
+        run: |
+          npm run build
 
       - name: Install Native Capacitor Plugins
         run: |
@@ -125,19 +129,19 @@ jobs:
         run: |
           cat << 'JSEOF' > dist/inject_share.js
           (function() {
-            const originalCreate = URL.createObjectURL;
+            var originalCreate = URL.createObjectURL;
             URL.createObjectURL = function(blob) {
-              const url = originalCreate.call(this, blob);
+              var url = originalCreate.call(this, blob);
               if (blob && (blob.type.includes('json') || blob.type.includes('octet') || blob.type.includes('text') || blob.type.includes('pdf') || blob.type.includes('html'))) {
-                const reader = new FileReader();
-                reader.onloadend = async function() {
+                var reader = new FileReader();
+                reader.onloadend = function() {
                   if (reader.result) {
-                    const base64Data = reader.result.split(',')[1];
+                    var base64Data = reader.result.split(',')[1];
                     if (base64Data) {
-                      const isJson = blob.type.includes('json');
-                      const isHtml = blob.type.includes('html');
-                      const ext = isJson ? 'json' : (isHtml ? 'html' : 'pdf');
-                      const mime = isJson ? 'application/json' : (isHtml ? 'text/html' : 'application/pdf');
+                      var isJson = blob.type.includes('json');
+                      var isHtml = blob.type.includes('html');
+                      var ext = isJson ? 'json' : (isHtml ? 'html' : 'pdf');
+                      var mime = isJson ? 'application/json' : (isHtml ? 'text/html' : 'application/pdf');
                       triggerNativeShare(base64Data, ext, mime);
                     }
                   }
@@ -148,16 +152,16 @@ jobs:
             };
 
             document.addEventListener('click', function(e) {
-              const anchor = e.target.closest('a[download]');
+              var anchor = e.target.closest('a[download]');
               if (anchor && anchor.href) {
-                const downloadName = anchor.download || '';
-                const isJson = downloadName.toLowerCase().endsWith('.json');
-                const isHtml = downloadName.toLowerCase().endsWith('.html') || downloadName.toLowerCase().endsWith('.htm');
-                const ext = isJson ? 'json' : (isHtml ? 'html' : 'pdf');
-                const mime = isJson ? 'application/json' : (isHtml ? 'text/html' : 'application/pdf');
+                var downloadName = anchor.download || '';
+                var isJson = downloadName.toLowerCase().endsWith('.json');
+                var isHtml = downloadName.toLowerCase().endsWith('.html') || downloadName.toLowerCase().endsWith('.htm');
+                var ext = isJson ? 'json' : (isHtml ? 'html' : 'pdf');
+                var mime = isJson ? 'application/json' : (isHtml ? 'text/html' : 'application/pdf');
 
                 if (anchor.href.startsWith('data:')) {
-                  const parts = anchor.href.split(',');
+                  var parts = anchor.href.split(',');
                   if (parts.length > 1) {
                     triggerNativeShare(parts[1], ext, mime, downloadName);
                   }
@@ -165,10 +169,10 @@ jobs:
                   fetch(anchor.href).then(function(res) {
                     return res.blob();
                   }).then(function(blob) {
-                    const reader = new FileReader();
+                    var reader = new FileReader();
                     reader.onloadend = function() {
                       if (reader.result) {
-                        const base64Data = reader.result.split(',')[1];
+                        var base64Data = reader.result.split(',')[1];
                         if (base64Data) {
                           triggerNativeShare(base64Data, ext, mime, downloadName);
                         }
@@ -183,16 +187,17 @@ jobs:
             }, true);
 
             async function triggerNativeShare(base64Data, ext, mimeType, customFileName) {
-              const dateStr = new Date().toISOString().slice(0, 10);
-              const extension = ext || 'pdf';
-              const isJson = extension === 'json';
-              const fileName = customFileName || (isJson ? "Daftar-Aldeyon-Backup-" + dateStr + ".json" : "Daftar-Aldeyon-Report-" + dateStr + "." + extension);
+              var dateStr = new Date().toISOString().slice(0, 10);
+              var extension = ext || 'pdf';
+              var isJson = extension === 'json';
+              var fileName = customFileName || (isJson ? 'Daftar-Aldeyon-Backup-' + dateStr + '.json' : 'Daftar-Aldeyon-Report-' + dateStr + '.' + extension);
 
               try {
                 if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
-                  const { Filesystem, Share } = window.Capacitor.Plugins;
+                  var Filesystem = window.Capacitor.Plugins.Filesystem;
+                  var Share = window.Capacitor.Plugins.Share;
 
-                  const savedFile = await Filesystem.writeFile({
+                  var savedFile = await Filesystem.writeFile({
                     path: fileName,
                     data: base64Data,
                     directory: 'CACHE'
@@ -206,19 +211,19 @@ jobs:
                   });
                 } else if (navigator.share) {
                   try {
-                    const byteChars = atob(base64Data);
-                    const byteNumbers = new Array(byteChars.length);
-                    for (let i = 0; i < byteChars.length; i++) {
+                    var byteChars = atob(base64Data);
+                    var byteNumbers = new Array(byteChars.length);
+                    for (var i = 0; i < byteChars.length; i++) {
                       byteNumbers[i] = byteChars.charCodeAt(i);
                     }
-                    const byteArray = new Uint8Array(byteNumbers);
-                    const file = new File([byteArray], fileName, { type: mimeType || (isJson ? 'application/json' : 'application/pdf') });
+                    var byteArray = new Uint8Array(byteNumbers);
+                    var file = new File([byteArray], fileName, { type: mimeType || (isJson ? 'application/json' : 'application/pdf') });
 
                     if (navigator.canShare && navigator.canShare({ files: [file] })) {
                       await navigator.share({
                         files: [file],
                         title: isJson ? 'النسخة الاحتياطية' : 'تقرير كشف الحساب',
-                        text: isJson ? 'ملف النسخة الاحتياطية' : 'تقرير كشف الحساب - دفتر الديون',
+                        text: isJson ? 'ملف النسخة الاحتياطية' : 'تقرير كشف الحساب - دفتر الديون'
                       });
                     }
                   } catch (webShareErr) {
@@ -238,7 +243,10 @@ jobs:
 
       - name: Initialize Capacitor Android
         run: |
-          npx cap init "Daftar Aldeyon" "com.daftar.aldeyon" --web-dir=dist
+          APP_NAME="دفتر الديون"
+          PACKAGE_ID="com.daftar.aldeyon"
+
+          npx cap init "$APP_NAME" "$PACKAGE_ID" --web-dir=dist
           npx cap add android
           npx cap sync android
 
@@ -260,103 +268,104 @@ jobs:
         run: |
           STYLES_PATH="android/app/src/main/res/values/styles.xml"
           if [ -f "$STYLES_PATH" ]; then
-            cat << 'EOF' > "$STYLES_PATH"
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">
-        <item name="colorPrimary">#0284c7</item>
-        <item name="colorPrimaryDark">#0369a1</item>
-        <item name="colorAccent">#0ea5e9</item>
-        <item name="android:windowBackground">@android:color/white</item>
-    </style>
-    <style name="AppTheme.NoActionBarLaunch" parent="AppTheme">
-        <item name="android:windowBackground">@drawable/splash</item>
-    </style>
-</resources>
-EOF
+            cat << 'XMLEOF' > "$STYLES_PATH"
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">
+                  <item name="colorPrimary">#0284c7</item>
+                  <item name="colorPrimaryDark">#0369a1</item>
+                  <item name="colorAccent">#0ea5e9</item>
+                  <item name="android:windowBackground">@android:color/white</item>
+              </style>
+              <style name="AppTheme.NoActionBarLaunch" parent="AppTheme">
+                  <item name="android:windowBackground">@drawable/splash</item>
+              </style>
+          </resources>
+          XMLEOF
           fi
 
           mkdir -p android/app/src/main/res/drawable
-          cat << 'EOF' > android/app/src/main/res/drawable/splash.xml
-<?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="@android:color/white" />
-    <item android:gravity="center">
-        <bitmap
-            android:gravity="center"
-            android:src="@mipmap/ic_launcher" />
-    </item>
-</layer-list>
-EOF
+          cat << 'XMLEOF' > android/app/src/main/res/drawable/splash.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+              <item android:drawable="@android:color/white" />
+              <item android:gravity="center">
+                  <bitmap
+                      android:gravity="center"
+                      android:src="@mipmap/ic_launcher" />
+              </item>
+          </layer-list>
+          XMLEOF
 
       - name: Inject 120Hz & Native Storage Acceleration into MainActivity
         run: |
           MAIN_ACTIVITY=$(find android/app/src/main/java -name "MainActivity.java" | head -n 1)
           if [ -n "$MAIN_ACTIVITY" ]; then
-            cat << 'EOF' > "$MAIN_ACTIVITY"
-package com.daftar.aldeyon;
+            cat << 'JAVAEOF' > "$MAIN_ACTIVITY"
+          package com.daftar.aldeyon;
 
-import android.os.Bundle;
-import android.os.Build;
-import android.view.WindowManager;
-import android.view.Display;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import com.getcapacitor.BridgeActivity;
+          import android.os.Bundle;
+          import android.os.Build;
+          import android.view.WindowManager;
+          import android.view.Display;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import com.getcapacitor.BridgeActivity;
 
-public class MainActivity extends BridgeActivity {
-    @Override
-    public void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
+          public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
 
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                Display display = getDisplay();
-                if (display != null) {
-                    Display.Mode[] modes = display.getSupportedModes();
-                    float maxRefreshRate = 60.0f;
-                    Display.Mode bestMode = null;
-                    for (Display.Mode mode : modes) {
-                        if (mode.getRefreshRate() > maxRefreshRate) {
-                            maxRefreshRate = mode.getRefreshRate();
-                            bestMode = mode;
-                        }
-                    }
-                    if (bestMode != null) {
-                        WindowManager.LayoutParams params = getWindow().getAttributes();
-                        params.preferredDisplayModeId = bestMode.getModeId();
-                        getWindow().setAttributes(params);
-                    }
-                }
-            }
-        } catch (Exception ignored) {}
+                  try {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                          Display display = getDisplay();
+                          if (display != null) {
+                              Display.Mode[] modes = display.getSupportedModes();
+                              float maxRefreshRate = 60.0f;
+                              Display.Mode bestMode = null;
+                              for (Display.Mode mode : modes) {
+                                  if (mode.getRefreshRate() > maxRefreshRate) {
+                                      maxRefreshRate = mode.getRefreshRate();
+                                      bestMode = mode;
+                                  }
+                              }
+                              if (bestMode != null) {
+                                  WindowManager.LayoutParams params = getWindow().getAttributes();
+                                  params.preferredDisplayModeId = bestMode.getModeId();
+                                  getWindow().setAttributes(params);
+                              }
+                          }
+                      }
+                  } catch (Exception ignored) {}
 
-        try {
-            if (this.bridge != null && this.bridge.getWebView() != null) {
-                WebView webView = this.bridge.getWebView();
-                WebSettings settings = webView.getSettings();
-                settings.setDomStorageEnabled(true);
-                settings.setDatabaseEnabled(true);
-                settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-                settings.setAllowFileAccess(true);
-                settings.setAllowContentAccess(true);
-                
-                webView.setLayerType(WebView.LAYER_TYPE_HARDWARE, null);
-            }
-        } catch (Exception ignored) {}
-    }
-}
-EOF
+                  try {
+                      if (this.bridge != null && this.bridge.getWebView() != null) {
+                          WebView webView = this.bridge.getWebView();
+                          WebSettings settings = webView.getSettings();
+                          settings.setDomStorageEnabled(true);
+                          settings.setDatabaseEnabled(true);
+                          settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+                          settings.setAllowFileAccess(true);
+                          settings.setAllowContentAccess(true);
+                          webView.setLayerType(WebView.LAYER_TYPE_HARDWARE, null);
+                      }
+                  } catch (Exception ignored) {}
+              }
+          }
+          JAVAEOF
+            echo "✅ تم حقن تسريع 120Hz والذاكرة والكاش في MainActivity.java بنجاح!"
           fi
 
-      - name: Enable R8 ProGuard Optimization
+      - name: Enable R8 / ProGuard Optimization & Code Shrinking
         run: |
+          echo "⚡ تفعيل R8 / ProGuard وضغط الموارد..."
           if [ -f "android/app/build.gradle" ]; then
             sed -i 's/minifyEnabled false/minifyEnabled true/g' android/app/build.gradle
             sed -i '/minifyEnabled true/a \            shrinkResources true' android/app/build.gradle
           fi
 
-          cat << 'EOF' >> android/app/proguard-rules.pro
+          cat << 'PROGUARDEOF' >> android/app/proguard-rules.pro
 
           -keepattributes JavascriptInterface
           -keepattributes *Annotation*
@@ -372,10 +381,13 @@ EOF
           -keep class androidx.core.content.FileProvider { *; }
           -keep public class * extends com.getcapacitor.Plugin { *; }
           -dontwarn androidx.**
-          EOF
+          PROGUARDEOF
 
-      - name: Create Icon Generator Script
+          echo "✅ تم تفعيل R8 وتحديث قواعد ProGuard بنجاح!"
+
+      - name: Generate Multi-Resolution App Icons
         run: |
+          python3 -m pip install pillow
           cat << 'PYEOF' > generate_icons.py
           import os
           from PIL import Image
@@ -403,14 +415,14 @@ EOF
                   
                   for fname in ['ic_launcher.png', 'ic_launcher_round.png', 'ic_launcher_foreground.png']:
                       resized.save(os.path.join(target_dir, fname))
+              print('Successfully generated launcher icons!')
+          else:
+              print('No icon found at icon.png or public/icon.png')
           PYEOF
-
-      - name: Generate Multi-Resolution App Icons
-        run: |
-          python3 -m pip install pillow
           python3 generate_icons.py
+          rm -f generate_icons.py
 
-      - name: Update Kotlin & Gradle Versions
+      - name: Update Kotlin & Gradle Versions for Java 21
         run: |
           cd android
           if [ -f "build.gradle" ]; then
@@ -435,19 +447,24 @@ EOF
             ${{ runner.os }}-gradle-
 
       - name: Sign Release APK with Persistent Key
+        env:
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
         run: |
           cd android
           chmod +x gradlew
 
           if [ -f "../daftar_release.keystore" ]; then
             cp ../daftar_release.keystore release.keystore
+            echo "✅ تم استخدام المفتاح الثابت: daftar_release.keystore"
           elif [ -f "../release.keystore" ]; then
             cp ../release.keystore release.keystore
+            echo "✅ تم استخدام المفتاح الثابت: release.keystore"
           else
+            echo "⚠️ لم يتم العثور على المفتاح، جاري استخدام المفتاح الاحتياطي..."
             keytool -genkeypair -v -keystore release.keystore -alias daftar_key -keyalg RSA -keysize 2048 -validity 10000 -storepass "DaftarPass2026" -keypass "DaftarPass2026" -dname "CN=DaftarAldeyon, OU=App, O=Daftar, L=Baghdad, S=Baghdad, C=IQ" -storetype PKCS12
           fi
 
-          RUN_NUM="${{ github.run_number }}"
+          RUN_NUM="$GITHUB_RUN_NUMBER"
           if [ -f "app/build.gradle" ]; then
             sed -i "s/versionCode 1/versionCode $RUN_NUM/g" app/build.gradle || true
           fi
@@ -462,7 +479,7 @@ EOF
           if [ -z "$TARGET_APK" ]; then
             TARGET_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
           fi
-
+          echo "جاري توقيع الملف: $TARGET_APK"
           $BUILD_TOOLS_DIR/apksigner sign --ks release.keystore --ks-pass pass:"DaftarPass2026" --key-pass pass:"DaftarPass2026" --out "app/build/outputs/apk/release/${FINAL_APK_NAME}" "$TARGET_APK"
 
       - name: Upload Signed APK Artifact
@@ -476,8 +493,8 @@ EOF
         if: success()
         with:
           files: android/app/build/outputs/apk/release/Daftar-Aldeyon-*.apk
-          name: Release v${{ github.run_number }}
-          tag_name: v${{ github.run_number }}
+          name: "إصدار تطبيق دفتر الديون v${{ github.run_number }}"
+          tag_name: "v${{ github.run_number }}"
           generate_release_notes: true
           draft: false
           prerelease: false
